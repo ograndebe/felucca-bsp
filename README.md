@@ -33,12 +33,13 @@ belong to their owners.
 | Device | Status |
 | --- | --- |
 | M-VAVE FM-1 | Supported. Used by Felucca. |
+| M-VAVE SMK-37 Pro | Board support in this branch (`boards/smk37`). Hardware bring-up pending. |
 | M-VAVE SMK-37 Elite | Planned. Not started. |
-| M-VAVE SMK-37 Pro | Planned. No board support yet. |
+| MKE-P37 | Planned. Not started. |
 
-"Planned" means the device is a target, not that it works. A device gets its own directory
-under `boards/` once someone has it running. Pin maps and other board facts are added only
-when they have been checked on a real unit.
+"Planned" means the device is a target, not that it works. The SMK-37 Pro board layer
+follows the hardware notes and the Erik37 reference; the first physical bring-up is still
+to be done. A device gets its own directory under `boards/` once someone has it running.
 
 ## Layout
 
@@ -55,7 +56,8 @@ when they have been checked on a real unit.
 | `examples/hwtest/` | Test firmware for a real FM-1: screen, knob, buttons, LEDs, USB serial. `hwtest.bin` is the safe image; `hwtest-exp.bin` adds the experimental parts |
 | `examples/felucca/` | Reference only: `ota_hw.c`, the hooks Felucca gives `ota.c`. Not built here |
 
-Headers include each other by file name. Build with `-Ichip -Iboards/fm1`. The loader builds from this tree with
+Headers include each other by file name. Build with `-Ichip -Iboards/fm1` for the FM-1, or
+`-DBOARD_SMK37=1 -Ichip -Iboards/smk37` for the SMK-37 Pro. The loader builds from this tree with
 the JieLi toolchain and gives the same image as it does inside Felucca.
 
 `tools/` has the package builder, the USB-MIDI installer and `fm1_rescue` (stock firmware back on an FM-1 that cannot

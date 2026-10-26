@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0
- * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments */
+ * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments
+ * The M-Vave SMK-37 parts: Copyright (C) 2026 M. Geisler (genkigenki/makkuro) */
 /* Felucca update loader (device side). Runs from RAM, started by the SPL from
  * an update record, with interrupts off: USB is polled from the main loop.
  * It is a USB-MIDI device "Felucca Update" (1209:0002) that answers the
@@ -12,13 +13,24 @@
 #define FELUCCA_OTA 1
 #define FELUCCA_OTA_DRYRUN 0
 #define FELUCCA_USB_PID 0x0002
+#include "fm1_cc.h"                             /* BOARD_SMK37, SMK_MODEL */
+#if BOARD_SMK37
+#define FELUCCA_ID "ota-" SMK_MODEL "_900"
+#else
 #define FELUCCA_ID "ota-FM-1_900"
+#endif
 #define RING_PUBLISH() __asm__ volatile("" ::: "memory")
 #include "fm1_time.h"
 #include "fm1_sys.h"
 /* the loader may write the app area and erase update records; never the head, nor Felucca's store
  * [0x97000, 0xE0000) (user data, never a record: ldr_core.c) */
+#if BOARD_SMK37
+/* the SMK-37: the app area up to 0x9D000, records only in the VM below BTIF/USRTRIM */
+#define FL_RANGE_OK(off, n) FL_LDR_RANGE_OK(off, n)
+#define FL_STOCKTAG_OK(off, n) 0
+#else
 #define FL_RANGE_OK(off, n) (FL_IN(off, n, 0x4000u, 0x97000u) || FL_IN(off, n, 0xE0000u, 0xFC000u))
+#endif
 #include "fm1_flash.h"
 #include "../chip/libc.c"
 #include "../chip/usb.c"

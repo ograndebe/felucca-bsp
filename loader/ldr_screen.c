@@ -4,7 +4,7 @@
  * (ldr_progress), in the installer page's colours. The panel is started as the app's lcd.c does (fm1-base
  * device/lcd.c: reset, sleep out, RGB565, IPS inversion), polled, at Felucca's SPI1 rate (BAUD 4).
  * Part of loader.c's single unit; every buffer is in RAM (the SPI DMA reads RAM only). */
-#include "../boards/fm1/fm1_lcd_hw.h"
+#include "fm1_lcd_hw.h"
 
 #define SCR_BG 0xFFBDu                              /* #faf4e8 cream */
 #define SCR_FG 0x49C5u                              /* #48392f brown */

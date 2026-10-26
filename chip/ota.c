@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0
- * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments */
+ * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments
+ * The M-Vave SMK-37 parts: Copyright (C) 2026 M. Geisler (genkigenki/makkuro) */
 /* M-UPGRADE entry: "step 1 lite".
  *
  * The updater talks SysEx (F0 pack7(00 59 cmd len24 body chk) F7):
@@ -22,10 +23,27 @@
  *   ota_show(step, code)       progress / result for the screen
  *   ota_commit(parm)           write RAM record + reset (never returns on hardware)
  */
+#include "fm1_cc.h"                          /* BOARD_SMK37, SMK_MODEL */
+#if BOARD_SMK37
+/* The M-Vave SMK-37: the last five sectors of the stock VM (0xBB000..0xBFFFF), below BTIF / USRTRIM. */
+#define OTA_AREA 0x000BB000u                     /* staged loader, 5 x 4 KiB */
+#define OTA_AREA_LEN 0x5000u
+#define OTA_RES (OTA_AREA + OTA_AREA_LEN - 0x100u)  /* 0xBFF00 = 4K boundary - 256: SPL scan */
+#define OTA_PARM_ID "ota-" SMK_MODEL "_016"       /* the loader's own USB identity */
+#define OTA_FL_LEN 0x9D000u                      /* flash.bin = [0, the PRCT end) */
+_Static_assert(OTA_AREA >= 0x9D000u && OTA_AREA + OTA_AREA_LEN <= 0xC0000u, "SMK-37: the OTA area outside the VM");
+_Static_assert(sizeof OTA_PARM_ID - 1u <= 32u, "SMK-37: the record identity is too long");
+#else
 #define OTA_AREA 0x000E0000u                     /* staged loader, 5 x 4 KiB */
 #define OTA_AREA_LEN 0x5000u
 #define OTA_RES (OTA_AREA + OTA_AREA_LEN - 0x100u)  /* 0xE4F00 = 4K boundary - 256: SPL scan */
+#endif
 #define OTA_FRAME_MAX 640u                       /* 512-B response = 605 wire bytes */
+#if BOARD_SMK37
+#define OTA_LDR_HCRC 0xEBAAu                     /* official update loader (usb_hid_ota.bin) */
+#define OTA_LDR_DCRC 0x5881u
+#define OTA_LDR_LEN 0x4DE1u
+#endif
 
 static int ota_wire_send(const uint8_t *p, uint32_t n);
 static int ota_frame_get(const uint8_t **p, uint32_t *n);
@@ -251,9 +269,15 @@ static int ota_boot_valid(uint32_t fl_off, uint32_t fl_len, uint8_t *b)
         k = ota_jl_enc_k(b + h, n - h, k);
         pcrc = ota_crc16(b + h, n - h, pcrc);
         fcrc = ota_crc16(b + h, n - h, fcrc);
-        if (!i && ota_memeq(b + 16 + 0x40, (const uint8_t *)"AC79BLID", 8) &&
-            !ota_memeq(b + 16 + 0x48, (const uint8_t *)"fm1", 4))
-            return -5;                                      /* another board's */
+        if (!i && ota_memeq(b + 16 + 0x40, (const uint8_t *)"AC79BLID", 8)) {
+#if BOARD_SMK37
+            if (ota_memeq(b + 16 + 0x48, (const uint8_t *)"fm1", 4))
+                return -5;                                  /* the FM-1's bootloader */
+#else
+            if (!ota_memeq(b + 16 + 0x48, (const uint8_t *)"fm1", 4))
+                return -5;                                  /* another board's */
+#endif
+        }
     }
     return pcrc == pwant && fcrc == dcrc ? 0 : -5;
 }
@@ -310,13 +334,23 @@ static int ota_stage(void)                       /* steps 1..6; 0 = host said su
 {
     static uint8_t hdr[0x400], b[512];
     uint32_t i, n, ota_off, ota_len, fl_off, fl_len, c, len, own;
+#if BOARD_SMK37
+    uint32_t official;
+#endif
     int rc;
     /* 1. UFW header + entry list */
     ota_show(1, 0);
     if ((rc = ota_ufw(hdr, &fl_off, &fl_len, &ota_off, &ota_len)) != 0)
         return rc;
+#if BOARD_SMK37
+    if (!fl_off || !ota_off)
+        return -3;
+    if (fl_len != OTA_FL_LEN)
+        return -15;                                 /* another board's package: nothing staged, nothing erased */
+#else
     if (!ota_off)
         return -3;
+#endif
     /* 2. the package's writer (any: M-VAVE's, Felucca's, m-bootloader's installer, another firmware's), well
      *    made: its JLFS head and inner head right, loaded where the SPL runs it, small enough to stage */
     if (ota_read(ota_off, b, 512))
@@ -328,6 +362,19 @@ static int ota_stage(void)                       /* steps 1..6; 0 = host said su
         return -7;
     for (i = 0x48, own = 0; i + 16u <= 0x48u + 64u && !own; i++)    /* first LZ4 literals: crt0_ldr.S */
         own = ota_memeq(b + i, (const uint8_t *)"FELUCCA-LOADER-1", 16) && ota_rd32(b + 0x20 + 4) <= 0x14000u;
+#if BOARD_SMK37
+    official = ota_rd16(b) == OTA_LDR_HCRC && ota_rd16(b + 2) == OTA_LDR_DCRC && len == OTA_LDR_LEN;
+    if (!official && !own)
+        return -7;                                  /* neither our loader nor the official one */
+    if (official) {                                 /* it writes the head: it must equal ours */
+        ota_show(2, 0);
+        for (i = 0; i < 0x4000u; i += 512u) {
+            static uint8_t mine[512];
+            if (ota_read(fl_off + i, b, 512) || ota_fread(i, mine, 512) || !ota_memeq(b, mine, 512))
+                return -5;
+        }
+    }
+#else
     /* 3. a flash image with it: Felucca's writer never writes its head (the app area only); any other may,
      *    so its boot area must be a bootable one for the FM-1 (no flash.bin: the writer brings its own) */
     if (fl_off && !own) {
@@ -335,6 +382,7 @@ static int ota_stage(void)                       /* steps 1..6; 0 = host said su
         if ((rc = ota_boot_valid(fl_off, fl_len, b)) != 0)
             return rc;
     }
+#endif
     /* 4. stage the package's loader: erase, body, verify, head last */
     ota_show(3, 0);
     if (ota_read(ota_off, b, 512))
@@ -401,8 +449,13 @@ static int ota_session(void)
     ota_wr16(parm + 2, 0x5A0Du);
     ota_wr16(parm + 4, 0x5A01u);
     ota_wr16(parm + 6, 0x5441u);
+#if BOARD_SMK37
+    for (i = 0; i < sizeof OTA_PARM_ID - 1u; i++)
+        parm[8 + i] = (uint8_t)OTA_PARM_ID[i];       /* the loader's own USB identity; zero after it */
+#else
     for (i = 0; i < 12u; i++)
         parm[8 + i] = (uint8_t)"ota-FM-1_015"[i];    /* the loader's own USB identity */
+#endif
     ota_wr32(parm + 72, OTA_AREA);
     ota_wr16(parm, ota_crc16(parm + 2, 78, 0));
 #if FELUCCA_OTA_DRYRUN
